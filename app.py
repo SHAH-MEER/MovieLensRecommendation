@@ -11,6 +11,7 @@ from collections import defaultdict
 import requests
 import io
 import zipfile
+from tmdb_utils import build_collaboration_network, get_box_office_data
 
 # Set page configuration
 st.set_page_config(
@@ -266,111 +267,86 @@ elif page == "Rating Distribution":
 # Actor/Director Networks page
 elif page == "Actor/Director Networks":
     st.header("Actor/Director Network Analysis")
-
-    st.info("""
-    For a complete implementation, this would require additional data about actors and directors, 
-    which isn't included in the basic MovieLens dataset. 
-
-    In a full implementation, we would:
-    1. Use the IMDb IDs from the links.csv file to fetch actor and director information
-    2. Build networks of actors who have worked together
-    3. Identify directors who frequently work with certain actors
-    4. Visualize these networks using NetworkX
-
-    Below is a simplified example visualization of how such a network might look.
-    """)
-
-    # Create a simple example network
-    G = nx.barabasi_albert_graph(30, 2)
-
-    # Generate some example actor names
-    actors = ["Actor " + str(i + 1) for i in range(30)]
-
-    # Assign names to nodes
-    node_labels = {i: actors[i] for i in range(30)}
-
-    # Draw the network
-    fig, ax = plt.subplots(figsize=(10, 10))
-    pos = nx.spring_layout(G, seed=42)
-    nx.draw_networkx(G, pos, with_labels=True, node_color='skyblue',
-                     node_size=500, labels=node_labels, font_size=8, ax=ax)
-    ax.set_title('Example Actor Collaboration Network')
-    ax.axis('off')
-
-    st.pyplot(fig)
-
-    st.write("""
-    This simplified visualization represents how actors might be connected through movie collaborations. 
-    The full implementation would use real data to show:
-
-    - Which actors frequently work together
-    - Which directors work with specific actors repeatedly
-    - Communities of actors who often collaborate
-    - The "six degrees of separation" phenomenon in the film industry
-    """)
+    
+    if not movies_df.empty and not links_df.empty:
+        with st.spinner("Fetching collaboration data..."):
+            actor_collaborations, director_actors = build_collaboration_network(movies_df, links_df)
+            
+            # Create network graph
+            G = nx.Graph()
+            
+            # Add actor collaboration edges
+            for actor1, collaborators in actor_collaborations.items():
+                for actor2, weight in collaborators.items():
+                    if weight > 1:  # Only show frequent collaborations
+                        G.add_edge(actor1, actor2, weight=weight)
+            
+            # Create the visualization
+            fig, ax = plt.subplots(figsize=(15, 15))
+            pos = nx.spring_layout(G, k=1, iterations=50)
+            
+            # Draw the network
+            nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=500)
+            nx.draw_networkx_edges(G, pos, alpha=0.2)
+            nx.draw_networkx_labels(G, pos, font_size=8)
+            
+            plt.title("Actor Collaboration Network")
+            st.pyplot(fig)
+            
+            # Show director insights
+            st.subheader("Director-Actor Frequent Collaborations")
+            for director, actors in director_actors.items():
+                frequent_collabs = {actor: count for actor, count in actors.items() if count > 1}
+                if frequent_collabs:
+                    st.write(f"**{director}** frequently works with:")
+                    for actor, count in sorted(frequent_collabs.items(), key=lambda x: x[1], reverse=True)[:3]:
+                        st.write(f"- {actor} ({count} collaborations)")
+    else:
+        st.error("Failed to load movie data.")
 
 # Box Office vs. Ratings page
 elif page == "Box Office vs. Ratings":
     st.header("Box Office Performance vs. Critic Scores")
-
-    st.info("""
-    The MovieLens dataset doesn't include box office information or critic scores.
-    To implement this feature, we would need to:
-
-    1. Use the IMDb IDs to fetch box office data and critic scores from additional sources
-    2. Analyze the correlation between financial success and critical reception
-    3. Visualize these relationships across different genres and time periods
-
-    Below is a simplified example of how such an analysis might look.
-    """)
-
-    # Create some sample data
-    np.random.seed(42)
-    n_movies = 100
-
-    sample_data = pd.DataFrame({
-        'Movie': [f"Movie {i + 1}" for i in range(n_movies)],
-        'Box_Office': np.random.exponential(scale=100, size=n_movies),
-        'Critic_Score': np.random.normal(loc=7, scale=1.5, size=n_movies),
-        'Genre': np.random.choice(['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Horror'], size=n_movies)
-    })
-
-    # Add some correlation
-    sample_data['Box_Office'] = sample_data['Box_Office'] + sample_data['Critic_Score'] * 5 + np.random.normal(0, 20,
-                                                                                                               n_movies)
-
-    # Create interactive scatter plot with plotly
-    fig = px.scatter(sample_data,
-                    x='Critic_Score',
-                    y='Box_Office',
-                    color='Genre',
-                    title='Example: Box Office Revenue vs. Critic Scores by Genre',
-                    labels={'Critic_Score': 'Critic Score (0-10)',
-                           'Box_Office': 'Box Office Revenue (millions $)',
-                           'Genre': 'Genre'},
-                    opacity=0.7)
-
-    # Add trend line
-    fig.add_trace(go.Scatter(
-        x=sample_data['Critic_Score'],
-        y=np.poly1d(np.polyfit(sample_data['Critic_Score'], sample_data['Box_Office'], 1))(sample_data['Critic_Score']),
-        mode='lines',
-        name='Trend',
-        line=dict(color='black'),
-        showlegend=True
-    ))
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.write("""
-    This example chart illustrates how we might visualize the relationship between box office performance and critic scores.
-    The actual implementation would analyze real data to answer questions like:
-
-    - Do critically acclaimed movies perform better at the box office?
-    - Which genres show the strongest correlation between reviews and financial success?
-    - Are there notable outliers (critically panned blockbusters or acclaimed box office failures)?
-    - How has this relationship changed over time?
-    """)
+    
+    if not movies_df.empty and not links_df.empty:
+        with st.spinner("Fetching box office data..."):
+            box_office_df = get_box_office_data(movies_df, links_df)
+            
+            if not box_office_df.empty:
+                # Create scatter plot
+                fig = px.scatter(box_office_df,
+                               x='vote_average',
+                               y='revenue',
+                               color='genres',
+                               title='Box Office Revenue vs. Rating',
+                               labels={'vote_average': 'TMDB Rating',
+                                     'revenue': 'Box Office Revenue ($)',
+                                     'genres': 'Genre'},
+                               hover_data=['title'],
+                               size=[1]*len(box_office_df))
+                
+                # Add trend line
+                fig.add_trace(go.Scatter(
+                    x=box_office_df['vote_average'],
+                    y=np.poly1d(np.polyfit(box_office_df['vote_average'], 
+                                         box_office_df['revenue'], 1))(box_office_df['vote_average']),
+                    mode='lines',
+                    name='Trend',
+                    line=dict(color='black')
+                ))
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show ROI analysis
+                st.subheader("Return on Investment Analysis")
+                box_office_df['roi'] = (box_office_df['revenue'] - box_office_df['budget']) / box_office_df['budget']
+                best_roi = box_office_df.nlargest(5, 'roi')[['title', 'roi', 'vote_average']]
+                st.write("Top 5 Movies by ROI:")
+                st.table(best_roi)
+            else:
+                st.error("No box office data available.")
+    else:
+        st.error("Failed to load movie data.")
 
 # Footer
 st.markdown("---")
