@@ -11,8 +11,19 @@ from collections import defaultdict
 import requests
 import io
 import zipfile
-from tmdb_utils import build_collaboration_network, get_box_office_data
-from recommender_utils import build_advanced_recommender, get_recommendations, get_cold_start_recommendations, get_genre_preferences, get_recommendation_explanation
+from tmdb_utils import (
+    build_collaboration_network, 
+    get_box_office_data,
+    get_movie_details,
+    get_movie_poster_url
+)
+from recommender_utils import (
+    build_advanced_recommender, 
+    get_recommendations, 
+    get_cold_start_recommendations, 
+    get_genre_preferences, 
+    get_recommendation_explanation
+)
 from movie_utils import search_movies, display_movie_details
 
 # Set page configuration
@@ -30,105 +41,271 @@ Use the sidebar to navigate between different features.
 """)
 
 
-# Function to load MovieLens data
 @st.cache_data
 def load_movielens_data():
-    # Download MovieLens 100K dataset
     url = "https://files.grouplens.org/datasets/movielens/ml-latest-small.zip"
-
     try:
         response = requests.get(url)
         z = zipfile.ZipFile(io.BytesIO(response.content))
-
-        # Extract and read the relevant files
         movies_df = pd.read_csv(z.open('ml-latest-small/movies.csv'))
         ratings_df = pd.read_csv(z.open('ml-latest-small/ratings.csv'))
         links_df = pd.read_csv(z.open('ml-latest-small/links.csv'))
         tags_df = pd.read_csv(z.open('ml-latest-small/tags.csv'))
-
         return movies_df, ratings_df, links_df, tags_df
     except Exception as e:
         st.error(f"Error loading data: {e}")
-        # Provide sample data if download fails
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
-# Load data
 movies_df, ratings_df, links_df, tags_df = load_movielens_data()
 
 
-# Process genre data
 def extract_genres(movies_df):
-    # Create a dictionary to store genre counts
     genre_counts = defaultdict(int)
-
-    # Extract genres from each movie
     for genres in movies_df['genres'].str.split('|'):
         for genre in genres:
             if genre != '(no genres listed)':
                 genre_counts[genre] += 1
-
-    # Convert to DataFrame
     genre_df = pd.DataFrame({
         'Genre': list(genre_counts.keys()),
         'Count': list(genre_counts.values())
     }).sort_values('Count', ascending=False)
-
     return genre_df
 
 
-# Create a collaborative filtering model using advanced methods
 @st.cache_resource
 def build_recommendation_model(ratings_df):
     with st.spinner("Building recommendation model... This may take a moment."):
         return build_advanced_recommender(ratings_df)
 
 
-# Navigation sidebar
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "Movie Recommendations"
+if 'selected_movie' not in st.session_state:
+    st.session_state.selected_movie = None
+if 'previous_page' not in st.session_state:
+    st.session_state.previous_page = None
+
+
+def view_movie_details(movie):
+    st.session_state.previous_page = st.session_state.current_page
+    st.session_state.current_page = "Movie Details"
+    st.session_state.selected_movie = movie
+    st.rerun()
+
+
+def go_back():
+    st.session_state.current_page = st.session_state.previous_page
+    st.session_state.selected_movie = None
+    st.rerun()
+
+
+def clear_search():
+    st.session_state.selected_movie = None
+    st.session_state.clear_search = True
+    st.session_state.last_search = ""
+
+
 st.sidebar.title("Navigation")
-page = st.sidebar.radio(
+main_page = st.sidebar.radio(
     "Select a feature",
-    ["Movie Recommendations", "Genre Analysis", "Rating Distribution",
-     "Actor/Director Networks", "Box Office vs. Ratings", "Movie Details"]
+    ["Search Movies", "Movie Recommendations", "Genre Analysis", "Rating Distribution",
+     "Actor/Director Networks", "Box Office vs. Ratings"]
 )
 
-# Add Search to sidebar
-st.sidebar.markdown("---")
-search_query = st.sidebar.text_input("Search Movies")
-if search_query:
-    search_results = search_movies(search_query, movies_df)
-    st.sidebar.write(f"Found {len(search_results)} results")
-    for _, movie in search_results.iterrows():
-        if st.sidebar.button(movie['title']):
-            st.session_state.selected_movie = movie
-            st.session_state.page = "Movie Details"
+if main_page != "Movie Details":
+    st.session_state.current_page = main_page
 
-# Update page selection to include Movie Details
-if hasattr(st.session_state, 'page'):
-    page = st.session_state.page
 
-# Movie Details page
-if page == "Movie Details":
-    if hasattr(st.session_state, 'selected_movie'):
+if st.session_state.current_page == "Search Movies":
+    st.header("Search Movies")
+    search_col1, search_col2, _ = st.columns([1, 2, 1])
+    with search_col2:
+        search_query = st.text_input(
+            "Search by title or genre",
+            key="search_input",
+            placeholder="Enter movie title or genre..."
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            search_clicked = st.button("🔍 Search", use_container_width=True)
+        with col2:
+            if st.button("🔄 Clear", type="secondary", use_container_width=True):
+                clear_search()
+                st.rerun()
+    if search_query:
+        if search_clicked or search_query != st.session_state.last_search:
+            st.session_state.last_search = search_query
+            search_results = search_movies(search_query, movies_df)
+            if not search_results.empty:
+                st.subheader(f"Found {len(search_results)} movies")
+                for i, (_, movie) in enumerate(search_results.iterrows()):
+                    st.markdown("---")
+                    tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+                    details = get_movie_details(tmdb_id)
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        poster_url = get_movie_poster_url(details)
+                        if poster_url:
+                            st.image(poster_url, width=150)
+                    with col2:
+                        st.markdown(f"### {movie['title']}")
+                        st.write(f"**Genres:** {movie['genres'].replace('|', ', ')}")
+                        if details and details.get('overview'):
+                            st.write(details['overview'][:200] + "..." if len(details['overview']) > 200 else details['overview'])
+                        if st.button("View Details →", key=f"view_{movie['movieId']}", use_container_width=True):
+                            view_movie_details(movie)
+            else:
+                st.info("No movies found matching your search.")
+
+elif st.session_state.current_page == "Movie Details":
+    if st.button("← Back", key="back_button"):
+        go_back()
+    if st.session_state.selected_movie is not None:
         movie = st.session_state.selected_movie
         tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
         display_movie_details(movie, tmdb_id)
+    else:
+        st.error("No movie selected")
+        go_back()
 
-# Movie Recommendations page
-elif page == "Movie Recommendations":
+elif st.session_state.current_page == "Movie Recommendations":
     st.header("Movie Recommendations")
+    if not movies_df.empty and not ratings_df.empty:
+        similarity_matrix = build_recommendation_model(ratings_df)
+        movie_titles = movies_df['title'].tolist()
+        st.subheader("Select movies you've enjoyed")
+        selected_movies = st.multiselect("Choose movies you like:", movie_titles)
+        if not selected_movies:
+            st.subheader("Popular Movies You Might Like")
+            genre_pref = st.session_state.get('genre_preferences', None)
+            recommendations = get_cold_start_recommendations(movies_df, ratings_df, genre_pref)
+            for _, movie in recommendations.iterrows():
+                col1, col2 = st.columns([1, 3])
+                tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+                details = get_movie_details(tmdb_id)
+                with col1:
+                    poster_url = get_movie_poster_url(details)
+                    if poster_url:
+                        st.image(poster_url, width=100)
+                with col2:
+                    st.write(f"**{movie['title']}**")
+                    st.write(f"Genres: {movie['genres']}")
+                    if st.button("View Details →", key=f"view_{movie['movieId']}", use_container_width=True):
+                        view_movie_details(movie)
+        elif selected_movies and st.button("Get Recommendations"):
+            with st.spinner("Finding recommendations..."):
+                selected_movie_ids = movies_df[movies_df['title'].isin(selected_movies)]['movieId'].tolist()
+                if selected_movie_ids:
+                    recommendations = get_recommendations(movies_df, similarity_matrix, selected_movie_ids)
+                    st.subheader("Your Personalized Recommendations:")
+                    for i, (_, movie) in enumerate(recommendations.iterrows(), 1):
+                        col1, col2 = st.columns([1, 3])
+                        details = get_movie_details(links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId'])
+                        with col1:
+                            poster_url = get_movie_poster_url(details)
+                            if poster_url:
+                                st.image(poster_url, width=100)
+                        with col2:
+                            st.write(f"{i}. **{movie['title']}**")
+                            st.write(f"Genres: {movie['genres'].replace('|', ', ')}")
+                            st.write(f"Similarity Score: {movie['similarity_score']:.2f}")
+                            explanation = get_recommendation_explanation(movie, movie['similarity_score'], 
+                                                                          movies_df, selected_movies)
+                            st.write(f"*Why this recommendation?* {explanation}")
+                else:
+                    st.warning("Could not find the selected movies in our database.")
+        st.subheader("Sample of Available Movies")
+        st.dataframe(movies_df[['title', 'genres']].sample(10))
+    else:
+        st.error("Failed to load movie data. Please try refreshing the page.")
 
+elif st.session_state.current_page == "Genre Analysis":
+    st.header("Genre Distribution Analysis")
+    if not movies_df.empty:
+        genre_df = extract_genres(movies_df)
+        fig = px.bar(genre_df, 
+                    x='Count', 
+                    y='Genre',
+    
+    # Create search interface
+    search_col1, search_col2, _ = st.columns([1, 2, 1])
+    with search_col2:
+        search_query = st.text_input(
+            "Search by title or genre",
+            key="search_input",
+            placeholder="Enter movie title or genre..."
+        )
+        
+        # Add search controls
+        col1, col2 = st.columns(2)
+        with col1:
+            search_clicked = st.button("🔍 Search", use_container_width=True)
+        with col2:
+            if st.button("🔄 Clear", type="secondary", use_container_width=True):
+                clear_search()
+                st.rerun()
+    
+    # Show search results
+    if search_query:
+        # Only search if query changed or search button clicked
+        if search_clicked or search_query != st.session_state.last_search:
+            st.session_state.last_search = search_query
+            search_results = search_movies(search_query, movies_df)
+            
+            if not search_results.empty:
+                st.subheader(f"Found {len(search_results)} movies")
+                
+                # Display results with posters and details
+                for i, (_, movie) in enumerate(search_results.iterrows()):
+                    st.markdown("---")
+                    tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+                    details = get_movie_details(tmdb_id)
+                    
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        poster_url = get_movie_poster_url(details)
+                        if poster_url:
+                            st.image(poster_url, width=150)
+                    
+                    with col2:
+                        st.markdown(f"### {movie['title']}")
+                        st.write(f"**Genres:** {movie['genres'].replace('|', ', ')}")
+                        if details and details.get('overview'):
+                            st.write(details['overview'][:200] + "..." if len(details['overview']) > 200 else details['overview'])
+                        if st.button("View Details →", key=f"view_{movie['movieId']}", use_container_width=True):
+                            view_movie_details(movie)
+            else:
+                st.info("No movies found matching your search.")
+
+"""Movie Details Page"""
+elif st.session_state.current_page == "Movie Details":
+    if st.button("← Back", key="back_button"):
+        go_back()
+    
+    if st.session_state.selected_movie is not None:
+        movie = st.session_state.selected_movie
+        tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+        display_movie_details(movie, tmdb_id)
+    else:
+        st.error("No movie selected")
+        go_back()
+
+    """Movie Recommendations Page"""
+elif st.session_state.current_page == "Movie Recommendations":
+    st.header("Movie Recommendations")
+    
     if not movies_df.empty and not ratings_df.empty:
         # Build the model
         similarity_matrix = build_recommendation_model(ratings_df)
-
+        
         # Get a list of all movie titles
         movie_titles = movies_df['title'].tolist()
-
+        
         # Let the user select movies they've watched and liked
         st.subheader("Select movies you've enjoyed")
         selected_movies = st.multiselect("Choose movies you like:", movie_titles)
-
+        
         if not selected_movies:
             # Cold start recommendations
             st.subheader("Popular Movies You Might Like")
@@ -136,20 +313,23 @@ elif page == "Movie Recommendations":
             if 'genre_preferences' in st.session_state:
                 genre_pref = st.session_state.genre_preferences
             recommendations = get_cold_start_recommendations(movies_df, ratings_df, genre_pref)
-
+            
             for _, movie in recommendations.iterrows():
                 col1, col2 = st.columns([1, 3])
-                details = get_movie_details(links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId'])
-
+                tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+                details = get_movie_details(tmdb_id)
+                
                 with col1:
                     poster_url = get_movie_poster_url(details)
                     if poster_url:
                         st.image(poster_url, width=100)
-
+                
                 with col2:
                     st.write(f"**{movie['title']}**")
                     st.write(f"Genres: {movie['genres']}")
-
+                    if st.button("View Details →", key=f"view_{movie['movieId']}", use_container_width=True):
+                        view_movie_details(movie)
+        
         elif selected_movies and st.button("Get Recommendations"):
             with st.spinner("Finding recommendations..."):
                 # Get the movieIds for the selected movies
@@ -190,8 +370,8 @@ elif page == "Movie Recommendations":
     else:
         st.error("Failed to load movie data. Please try refreshing the page.")
 
-# Genre Analysis page
-elif page == "Genre Analysis":
+    """Genre Analysis Page"""
+elif st.session_state.current_page == "Genre Analysis":
     st.header("Genre Distribution Analysis")
 
     if not movies_df.empty:
@@ -226,8 +406,8 @@ elif page == "Genre Analysis":
     else:
         st.error("Failed to load movie data. Please try refreshing the page.")
 
-# Rating Distribution page
-elif page == "Rating Distribution":
+    """Rating Distribution Page"""
+elif st.session_state.current_page == "Rating Distribution":
     st.header("Rating Distribution Analysis")
 
     if not ratings_df.empty and not movies_df.empty:
@@ -296,48 +476,72 @@ elif page == "Rating Distribution":
     else:
         st.error("Failed to load movie data. Please try refreshing the page.")
 
-# Actor/Director Networks page
-elif page == "Actor/Director Networks":
+    """Actor/Director Networks Page"""
+    elif st.session_state.current_page == "Actor/Director Networks":
     st.header("Actor/Director Network Analysis")
     
     if not movies_df.empty and not links_df.empty:
-        with st.spinner("Fetching collaboration data..."):
-            actor_collaborations, director_actors = build_collaboration_network(movies_df, links_df)
-            
-            # Create network graph
-            G = nx.Graph()
-            
-            # Add actor collaboration edges
-            for actor1, collaborators in actor_collaborations.items():
-                for actor2, weight in collaborators.items():
-                    if weight > 1:  # Only show frequent collaborations
-                        G.add_edge(actor1, actor2, weight=weight)
-            
+        actor_collaborations, director_actors = build_collaboration_network(movies_df, links_df)
+        
+        # Create network graph
+        G = nx.Graph()
+        
+        # Add actor collaboration edges with weights
+        for actor1, collaborators in actor_collaborations.items():
+            for actor2, weight in collaborators.items():
+                if weight >= 1:  # Include all collaborations
+                    G.add_edge(actor1, actor2, weight=weight)
+        
+        if len(G.nodes()) > 0:
             # Create the visualization
             fig, ax = plt.subplots(figsize=(15, 15))
-            pos = nx.spring_layout(G, k=1, iterations=50)
             
-            # Draw the network
-            nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=500)
-            nx.draw_networkx_edges(G, pos, alpha=0.2)
-            nx.draw_networkx_labels(G, pos, font_size=8)
+            # Use spring layout with optimized parameters
+            pos = nx.spring_layout(G, k=1.5, iterations=100, seed=42)
             
-            plt.title("Actor Collaboration Network")
+            # Draw edges with varying width based on weight
+            edge_weights = [G[u][v]['weight']*2 for u, v in G.edges()]
+            nx.draw_networkx_edges(G, pos, alpha=0.3, width=edge_weights)
+            
+            # Draw nodes with size based on degree centrality
+            centrality = nx.degree_centrality(G)
+            node_sizes = [centrality[node] * 5000 + 100 for node in G.nodes()]
+            nx.draw_networkx_nodes(G, pos, node_color='lightblue', 
+                                 node_size=node_sizes,
+                                 alpha=0.7)
+            
+            # Draw labels only for important nodes
+            important_nodes = {node: node for node, size in zip(G.nodes(), node_sizes) if size > 200}
+            nx.draw_networkx_labels(G, pos, labels=important_nodes, font_size=8)
+            
+            plt.title("Actor Collaboration Network\n(Node size indicates collaboration frequency)")
+            ax.axis('off')
             st.pyplot(fig)
             
+            # Show collaboration insights
+            st.subheader("Key Collaboration Insights")
+            
+            # Find most connected actors
+            degrees = dict(G.degree())
+            top_actors = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            st.write("Most Collaborative Actors:")
+            for actor, degree in top_actors:
+                st.write(f"- {actor} ({degree} collaborations)")
+            
             # Show director insights
-            st.subheader("Director-Actor Frequent Collaborations")
-            for director, actors in director_actors.items():
-                frequent_collabs = {actor: count for actor, count in actors.items() if count > 1}
+            st.subheader("Notable Director-Actor Partnerships")
+            for director, actors in list(director_actors.items())[:5]:
+                frequent_collabs = {actor: count for actor, count in actors.items() if count >= 1}
                 if frequent_collabs:
                     st.write(f"**{director}** frequently works with:")
                     for actor, count in sorted(frequent_collabs.items(), key=lambda x: x[1], reverse=True)[:3]:
-                        st.write(f"- {actor} ({count} collaborations)")
-    else:
-        st.error("Failed to load movie data.")
+                        st.write(f"- {actor} ({count} collaboration{'s' if count > 1 else ''})")
+        else:
+            st.warning("Building collaboration network... Please wait or refresh the page.")
 
-# Box Office vs. Ratings page
-elif page == "Box Office vs. Ratings":
+    """Box Office vs. Ratings Page"""
+elif st.session_state.current_page == "Box Office vs. Ratings":
     st.header("Box Office Performance vs. Critic Scores")
     
     if not movies_df.empty and not links_df.empty:
@@ -405,5 +609,5 @@ elif page == "Box Office vs. Ratings":
         st.error("Failed to load movie data.")
 
 # Footer
-st.markdown("---")
-st.markdown("Movie Recommendation Engine - Built with Streamlit, Surprise, and NetworkX")
+    st.markdown("---")
+    st.markdown("Movie Recommendation Engine - Built with Streamlit, Surprise, and NetworkX")

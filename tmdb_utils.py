@@ -19,37 +19,43 @@ def get_movie_details(movie_id):
     response = requests.get(url, params={"api_key": TMDB_API_KEY})
     return response.json() if response.ok else None
 
-def build_collaboration_network(movies_df, links_df, max_movies=100):
-    """Build actor and director collaboration network"""
+def get_movie_poster_url(movie_details):
+    """Get movie poster URL from TMDB"""
+    if movie_details and movie_details.get('poster_path'):
+        return f"https://image.tmdb.org/t/p/w500{movie_details['poster_path']}"
+    return None
+
+def build_collaboration_network(movies_df, links_df, max_movies=30):
+    """Build actor and director collaboration network with improved filtering"""
     actor_collaborations = defaultdict(lambda: defaultdict(int))
     director_actors = defaultdict(lambda: defaultdict(int))
     
-    # Get sample of movies
-    sample_movies = links_df.merge(movies_df, on='movieId').sample(n=min(max_movies, len(movies_df)))
+    # Get more recent movies first by sorting on movieId (assuming higher IDs are newer)
+    sample_movies = links_df.merge(movies_df, on='movieId').sort_values('movieId', ascending=False).head(max_movies)
     
-    for _, movie in sample_movies.iterrows():
-        tmdb_id = movie['tmdbId']
-        credits = get_movie_credits(tmdb_id)
-        
-        if not credits:
-            continue
+    with st.spinner("Analyzing movie collaborations..."):
+        for _, movie in sample_movies.iterrows():
+            credits = get_movie_credits(movie['tmdbId'])
             
-        # Get main cast and director
-        cast = [actor['name'] for actor in credits.get('cast', [])[:5]]  # Top 5 actors
-        directors = [crew['name'] for crew in credits.get('crew', []) if crew['job'] == 'Director']
-        
-        # Record actor collaborations
-        for i, actor1 in enumerate(cast):
-            for actor2 in cast[i+1:]:
-                actor_collaborations[actor1][actor2] += 1
-                actor_collaborations[actor2][actor1] += 1
-        
-        # Record director-actor relationships
-        for director in directors:
-            for actor in cast:
-                director_actors[director][actor] += 1
+            if not credits or 'cast' not in credits or 'crew' not in credits:
+                continue
+                
+            # Get main cast (limit to principal cast)
+            cast = [actor['name'] for actor in credits['cast'][:5] if actor.get('order', 10) < 5]
+            directors = [crew['name'] for crew in credits['crew'] if crew['job'] == 'Director']
+            
+            # Record actor collaborations
+            for i, actor1 in enumerate(cast):
+                for actor2 in cast[i+1:]:
+                    actor_collaborations[actor1][actor2] += 1
+                    actor_collaborations[actor2][actor1] += 1
+                    
+            # Record director-actor relationships
+            for director in directors:
+                for actor in cast:
+                    director_actors[director][actor] += 1
     
-    return actor_collaborations, director_actors
+    return dict(actor_collaborations), dict(director_actors)
 
 def get_box_office_data(movies_df, links_df, max_movies=100):
     """Get box office and rating data for movies"""
