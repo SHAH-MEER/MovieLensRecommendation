@@ -62,25 +62,9 @@ Open your browser and navigate to: `http://localhost:8501`
 
 ---
 
-## 📊 Data Analysis Capabilities
-
-- Identify user-specific movie preferences
-- Perform temporal analysis on ratings and film popularity
-- Map genre correlations and viewer trends
-- Visualize networks of actor/director collaborations
-- Analyze the relationship between critical acclaim and commercial success
-
----
-
 ## 🔮 Future Enhancements
 - Integration of international film datasets
 - Trying better Models(Including Deep learning models)
-
----
-
-## 📸 Screenshots
-
-_Add screenshots of your app interface here, with short descriptions._
 
 ---
 
