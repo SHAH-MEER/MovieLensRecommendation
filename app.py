@@ -12,7 +12,8 @@ import requests
 import io
 import zipfile
 from tmdb_utils import build_collaboration_network, get_box_office_data
-from recommender_utils import build_advanced_recommender, get_recommendations
+from recommender_utils import build_advanced_recommender, get_recommendations, get_cold_start_recommendations, get_genre_preferences, get_recommendation_explanation
+from movie_utils import search_movies, display_movie_details
 
 # Set page configuration
 st.set_page_config(
@@ -88,11 +89,33 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Select a feature",
     ["Movie Recommendations", "Genre Analysis", "Rating Distribution",
-     "Actor/Director Networks", "Box Office vs. Ratings"]
+     "Actor/Director Networks", "Box Office vs. Ratings", "Movie Details"]
 )
 
+# Add Search to sidebar
+st.sidebar.markdown("---")
+search_query = st.sidebar.text_input("Search Movies")
+if search_query:
+    search_results = search_movies(search_query, movies_df)
+    st.sidebar.write(f"Found {len(search_results)} results")
+    for _, movie in search_results.iterrows():
+        if st.sidebar.button(movie['title']):
+            st.session_state.selected_movie = movie
+            st.session_state.page = "Movie Details"
+
+# Update page selection to include Movie Details
+if hasattr(st.session_state, 'page'):
+    page = st.session_state.page
+
+# Movie Details page
+if page == "Movie Details":
+    if hasattr(st.session_state, 'selected_movie'):
+        movie = st.session_state.selected_movie
+        tmdb_id = links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId']
+        display_movie_details(movie, tmdb_id)
+
 # Movie Recommendations page
-if page == "Movie Recommendations":
+elif page == "Movie Recommendations":
     st.header("Movie Recommendations")
 
     if not movies_df.empty and not ratings_df.empty:
@@ -106,7 +129,28 @@ if page == "Movie Recommendations":
         st.subheader("Select movies you've enjoyed")
         selected_movies = st.multiselect("Choose movies you like:", movie_titles)
 
-        if selected_movies and st.button("Get Recommendations"):
+        if not selected_movies:
+            # Cold start recommendations
+            st.subheader("Popular Movies You Might Like")
+            genre_pref = None
+            if 'genre_preferences' in st.session_state:
+                genre_pref = st.session_state.genre_preferences
+            recommendations = get_cold_start_recommendations(movies_df, ratings_df, genre_pref)
+
+            for _, movie in recommendations.iterrows():
+                col1, col2 = st.columns([1, 3])
+                details = get_movie_details(links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId'])
+
+                with col1:
+                    poster_url = get_movie_poster_url(details)
+                    if poster_url:
+                        st.image(poster_url, width=100)
+
+                with col2:
+                    st.write(f"**{movie['title']}**")
+                    st.write(f"Genres: {movie['genres']}")
+
+        elif selected_movies and st.button("Get Recommendations"):
             with st.spinner("Finding recommendations..."):
                 # Get the movieIds for the selected movies
                 selected_movie_ids = movies_df[movies_df['title'].isin(selected_movies)]['movieId'].tolist()
@@ -122,9 +166,21 @@ if page == "Movie Recommendations":
                     # Display recommendations
                     st.subheader("Your Personalized Recommendations:")
                     for i, (_, movie) in enumerate(recommendations.iterrows(), 1):
-                        st.write(f"{i}. **{movie['title']}**")
-                        st.write(f"   Genres: {movie['genres'].replace('|', ', ')}")
-                        st.write(f"   Similarity Score: {movie['similarity_score']:.2f}")
+                        col1, col2 = st.columns([1, 3])
+                        details = get_movie_details(links_df[links_df['movieId'] == movie['movieId']].iloc[0]['tmdbId'])
+
+                        with col1:
+                            poster_url = get_movie_poster_url(details)
+                            if poster_url:
+                                st.image(poster_url, width=100)
+
+                        with col2:
+                            st.write(f"{i}. **{movie['title']}**")
+                            st.write(f"Genres: {movie['genres'].replace('|', ', ')}")
+                            st.write(f"Similarity Score: {movie['similarity_score']:.2f}")
+                            explanation = get_recommendation_explanation(movie, movie['similarity_score'], 
+                                                                      movies_df, selected_movies)
+                            st.write(f"*Why this recommendation?* {explanation}")
                 else:
                     st.warning("Could not find the selected movies in our database.")
 
