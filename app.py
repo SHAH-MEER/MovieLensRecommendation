@@ -12,6 +12,7 @@ import requests
 import io
 import zipfile
 from tmdb_utils import build_collaboration_network, get_box_office_data
+from recommender_utils import build_advanced_recommender, get_recommendations
 
 # Set page configuration
 st.set_page_config(
@@ -75,28 +76,11 @@ def extract_genres(movies_df):
     return genre_df
 
 
-# Create a collaborative filtering model using cosine similarity
+# Create a collaborative filtering model using advanced methods
 @st.cache_resource
 def build_recommendation_model(ratings_df):
-    # Create a user-movie matrix
-    user_movie_matrix = ratings_df.pivot_table(
-        index='userId',
-        columns='movieId',
-        values='rating',
-        fill_value=0
-    )
-    
-    # Calculate cosine similarity between movies
-    movie_similarity = cosine_similarity(user_movie_matrix.T)
-    
-    # Create a DataFrame with movie similarities
-    movie_similarity_df = pd.DataFrame(
-        movie_similarity,
-        index=user_movie_matrix.columns,
-        columns=user_movie_matrix.columns
-    )
-    
-    return movie_similarity_df
+    with st.spinner("Building recommendation model... This may take a moment."):
+        return build_advanced_recommender(ratings_df)
 
 
 # Navigation sidebar
@@ -113,7 +97,7 @@ if page == "Movie Recommendations":
 
     if not movies_df.empty and not ratings_df.empty:
         # Build the model
-        movie_similarity_df = build_recommendation_model(ratings_df)
+        similarity_matrix = build_recommendation_model(ratings_df)
 
         # Get a list of all movie titles
         movie_titles = movies_df['title'].tolist()
@@ -123,34 +107,26 @@ if page == "Movie Recommendations":
         selected_movies = st.multiselect("Choose movies you like:", movie_titles)
 
         if selected_movies and st.button("Get Recommendations"):
-            # Get the movieIds for the selected movies
-            selected_movie_ids = movies_df[movies_df['title'].isin(selected_movies)]['movieId'].tolist()
+            with st.spinner("Finding recommendations..."):
+                # Get the movieIds for the selected movies
+                selected_movie_ids = movies_df[movies_df['title'].isin(selected_movies)]['movieId'].tolist()
 
-            if selected_movie_ids:
-                # Get similar movies
-                similar_movies = []
-                for movie_id in selected_movie_ids:
-                    if movie_id in movie_similarity_df.index:
-                        similar = movie_similarity_df[movie_id].sort_values(ascending=False)[1:11]
-                        similar_movies.extend(list(zip([movie_id] * len(similar), similar.index, similar.values)))
+                if selected_movie_ids:
+                    # Get recommendations
+                    recommendations = get_recommendations(
+                        movies_df, 
+                        similarity_matrix, 
+                        selected_movie_ids
+                    )
 
-                # Sort by similarity and get unique recommendations
-                similar_movies.sort(key=lambda x: x[2], reverse=True)
-                recommended_ids = []
-                for _, movie_id, _ in similar_movies:
-                    if movie_id not in selected_movie_ids and movie_id not in recommended_ids:
-                        recommended_ids.append(movie_id)
-                        if len(recommended_ids) == 10:
-                            break
-
-                # Display recommendations
-                st.subheader("Your Personalized Recommendations:")
-                for i, movie_id in enumerate(recommended_ids, 1):
-                    movie_info = movies_df[movies_df['movieId'] == movie_id].iloc[0]
-                    st.write(f"{i}. **{movie_info['title']}**")
-                    st.write(f"   Genres: {movie_info['genres'].replace('|', ', ')}")
-            else:
-                st.warning("Could not find the selected movies in our database.")
+                    # Display recommendations
+                    st.subheader("Your Personalized Recommendations:")
+                    for i, (_, movie) in enumerate(recommendations.iterrows(), 1):
+                        st.write(f"{i}. **{movie['title']}**")
+                        st.write(f"   Genres: {movie['genres'].replace('|', ', ')}")
+                        st.write(f"   Similarity Score: {movie['similarity_score']:.2f}")
+                else:
+                    st.warning("Could not find the selected movies in our database.")
 
         # Display sample of available movies
         st.subheader("Sample of Available Movies")
@@ -313,35 +289,59 @@ elif page == "Box Office vs. Ratings":
             box_office_df = get_box_office_data(movies_df, links_df)
             
             if not box_office_df.empty:
+                # Preprocess data
+                box_office_df['revenue_millions'] = box_office_df['revenue'] / 1_000_000
+                # Extract primary genre
+                box_office_df['primary_genre'] = box_office_df['genres'].str.split('|').str[0]
+                
                 # Create scatter plot
                 fig = px.scatter(box_office_df,
                                x='vote_average',
-                               y='revenue',
-                               color='genres',
+                               y='revenue_millions',
+                               color='primary_genre',
                                title='Box Office Revenue vs. Rating',
                                labels={'vote_average': 'TMDB Rating',
-                                     'revenue': 'Box Office Revenue ($)',
-                                     'genres': 'Genre'},
-                               hover_data=['title'],
-                               size=[1]*len(box_office_df))
+                                     'revenue_millions': 'Box Office Revenue (Millions $)',
+                                     'primary_genre': 'Primary Genre'},
+                               hover_data={
+                                   'title': True,
+                                   'revenue_millions': ':.1f',
+                                   'vote_average': ':.1f'
+                               })
+                
+                # Update layout
+                fig.update_layout(
+                    xaxis_range=[0, 10],
+                    yaxis_range=[0, box_office_df['revenue_millions'].max() * 1.1],
+                    height=600
+                )
                 
                 # Add trend line
+                z = np.polyfit(box_office_df['vote_average'], box_office_df['revenue_millions'], 1)
+                p = np.poly1d(z)
                 fig.add_trace(go.Scatter(
                     x=box_office_df['vote_average'],
-                    y=np.poly1d(np.polyfit(box_office_df['vote_average'], 
-                                         box_office_df['revenue'], 1))(box_office_df['vote_average']),
+                    y=p(box_office_df['vote_average']),
                     mode='lines',
                     name='Trend',
-                    line=dict(color='black')
+                    line=dict(color='black', dash='dash'),
+                    showlegend=True
                 ))
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Show ROI analysis
                 st.subheader("Return on Investment Analysis")
-                box_office_df['roi'] = (box_office_df['revenue'] - box_office_df['budget']) / box_office_df['budget']
-                best_roi = box_office_df.nlargest(5, 'roi')[['title', 'roi', 'vote_average']]
-                st.write("Top 5 Movies by ROI:")
+                box_office_df['roi'] = box_office_df.apply(
+                    lambda x: ((x['revenue'] - x['budget']) / x['budget']) if x['budget'] > 0 else 0, 
+                    axis=1
+                )
+                box_office_df['roi_pct'] = box_office_df['roi'].apply(lambda x: f"{x*100:.1f}%")
+                
+                best_roi = box_office_df.nlargest(5, 'roi')[
+                    ['title', 'roi_pct', 'vote_average', 'primary_genre']
+                ]
+                best_roi.columns = ['Movie Title', 'Return on Investment', 'Rating', 'Genre']
                 st.table(best_roi)
             else:
                 st.error("No box office data available.")

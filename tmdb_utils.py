@@ -1,8 +1,10 @@
+import streamlit as st
 import requests
 import pandas as pd
 from collections import defaultdict
 
-TMDB_API_KEY = "YOUR_TMDB_API_KEY"  # Replace with your TMDB API key
+# Use secret from Streamlit instead of hardcoded key
+TMDB_API_KEY = st.secrets["TMDB_API_KEY"]
 BASE_URL = "https://api.themoviedb.org/3"
 
 def get_movie_credits(movie_id):
@@ -62,12 +64,18 @@ def get_box_office_data(movies_df, links_df, max_movies=100):
         if not details:
             continue
             
-        box_office_data.append({
-            'title': movie['title'],
-            'revenue': details.get('revenue', 0),
-            'budget': details.get('budget', 0),
-            'vote_average': details.get('vote_average', 0),
-            'genres': movie['genres']
-        })
+        revenue = details.get('revenue', 0)
+        budget = details.get('budget', 0)
+        vote_average = details.get('vote_average', 0)
+        
+        # Only include movies with valid data
+        if revenue > 0 and budget > 0 and vote_average > 0:
+            box_office_data.append({
+                'title': movie['title'],
+                'revenue': revenue,
+                'budget': budget,
+                'vote_average': vote_average,
+                'genres': movie['genres']
+            })
     
     return pd.DataFrame(box_office_data)
