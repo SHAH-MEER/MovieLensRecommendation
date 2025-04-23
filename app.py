@@ -11,6 +11,7 @@ from collections import defaultdict
 import requests
 import io
 import zipfile
+import joblib
 from tmdb_utils import (
     build_collaboration_network, 
     get_box_office_data,
@@ -75,7 +76,13 @@ def extract_genres(movies_df):
 
 @st.cache_resource
 def build_recommendation_model(ratings_df):
-    with st.spinner("Building recommendation model... This may take a moment."):
+    """Load or build the recommendation model"""
+    try:
+        model_data = joblib.load('models/best_model.joblib')
+        st.success("Loaded pre-trained recommendation model")
+        return model_data['similarity_matrix']
+    except FileNotFoundError:
+        st.warning("Pre-trained model not found. Building new model...")
         return build_advanced_recommender(ratings_df)
 
 

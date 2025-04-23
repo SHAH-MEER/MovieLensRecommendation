@@ -4,6 +4,10 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
+import joblib
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 def build_advanced_recommender(ratings_df, n_components=100):
     """Build a hybrid recommendation system using TruncatedSVD and content features"""
@@ -26,6 +30,75 @@ def build_advanced_recommender(ratings_df, n_components=100):
         index=user_movie_matrix.columns,
         columns=user_movie_matrix.columns
     )
+
+def train_and_save_best_model(ratings_df, model_path='best_model.joblib'):
+    """Train, optimize, and save the best recommendation model"""
+    
+    # Create user-movie matrix
+    user_movie_matrix = ratings_df.pivot(
+        index='userId',
+        columns='movieId',
+        values='rating'
+    ).fillna(0)
+    
+    # Define pipeline
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('svd', TruncatedSVD())
+    ])
+    
+    # Define parameter grid
+    param_grid = {
+        'svd__n_components': [50, 100, 150],
+        'svd__n_iter': [5, 10],
+        'svd__random_state': [42]
+    }
+    
+    # Perform grid search
+    grid_search = GridSearchCV(
+        pipeline,
+        param_grid,
+        cv=5,
+        scoring='explained_variance',
+        n_jobs=-1,
+        verbose=1
+    )
+    
+    # Fit the model
+    with st.spinner("Optimizing recommendation model... This may take a while."):
+        grid_search.fit(user_movie_matrix.T)
+        
+        # Get best model and compute similarity matrix
+        best_model = grid_search.best_estimator_
+        movie_features = best_model.transform(user_movie_matrix.T)
+        movie_similarity = cosine_similarity(movie_features)
+        
+        # Save model and similarity matrix
+        model_data = {
+            'model': best_model,
+            'similarity_matrix': pd.DataFrame(
+                movie_similarity,
+                index=user_movie_matrix.columns,
+                columns=user_movie_matrix.columns
+            ),
+            'best_params': grid_search.best_params_,
+            'best_score': grid_search.best_score_
+        }
+        joblib.dump(model_data, model_path)
+        
+        return model_data
+
+def load_or_train_model(ratings_df, force_retrain=False, model_path='models/best_model.joblib'):
+    """Load existing model or train new one if necessary"""
+    try:
+        if force_retrain:
+            raise FileNotFoundError  # Force retraining
+            
+        model_data = joblib.load(model_path)
+        return model_data['similarity_matrix']
+        
+    except FileNotFoundError:
+        return build_advanced_recommender(ratings_df)
 
 def get_recommendations(movies_df, similarity_matrix, selected_movie_ids, n_recommendations=10):
     """Get movie recommendations using the similarity matrix"""

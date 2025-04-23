@@ -62,4 +62,7 @@ Thumbs.db
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Model files
+models/*.joblib
+
 app2.py
