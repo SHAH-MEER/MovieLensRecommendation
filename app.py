@@ -419,4 +419,7 @@ elif st.session_state.current_page == "Box Office vs. Ratings":
         st.error("Failed to load movie data.")
 
 st.markdown("---")
-st.markdown("Movie Recommendation Engine - Built with Streamlit, Surprise, and NetworkX")
+st.markdown(
+    "Made by [<img src='https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png' width='20'>](https://github.com/SHAH-MEER)",
+    unsafe_allow_html=True
+)
